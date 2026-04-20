@@ -348,7 +348,7 @@ function HelpView() {
           <Text color="yellow" bold>  Supported Agents</Text>
           <Text> </Text>
           <Text>  <Text color="magenta" bold>CC</Text>  Claude Code    <Text color="green">full resume</Text>     claude -r {"<id>"}</Text>
-          <Text>  <Text color="green" bold>CX</Text>  Codex          <Text color="green">full resume</Text>     codex --resume {"<id>"}</Text>
+          <Text>  <Text color="green" bold>CX</Text>  Codex          <Text color="green">full resume</Text>     codex resume {"<id>"}</Text>
           <Text>  <Text color="blue" bold>CR</Text>  Cursor         <Text color="yellow">open workspace</Text>  cursor {"<dir>"}</Text>
           <Text>  <Text color="cyan" bold>OC</Text>  OpenCode       <Text color="green">full resume</Text>     opencode --session {"<id>"}</Text>
           <Text> </Text>

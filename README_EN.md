@@ -32,7 +32,7 @@ Different agents, different directories, different git branches. You remember *d
 | Badge | Agent | Resume | How |
 |-------|-------|--------|-----|
 | **CC** | Claude Code | Full resume | `claude -r <session-id>` |
-| **CX** | Codex | Full resume | `codex --resume <thread-id>` |
+| **CX** | Codex | Full resume | `codex resume <thread-id>` |
 | **CR** | Cursor | Open workspace | `cursor <directory>` |
 | **OC** | OpenCode | Full resume | `opencode --session <session-id>` |
 

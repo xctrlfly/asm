@@ -113,7 +113,7 @@ export class CodexProvider implements SessionProvider {
           updatedAt: new Date(row.updated_at * 1000),
           model: row.model_provider,
           status: row.archived ? "archived" : "active",
-          resumeCommand: `codex --resume ${row.id}`,
+          resumeCommand: `codex resume ${row.id}`,
           canResume: row.archived === 0,
         });
       }

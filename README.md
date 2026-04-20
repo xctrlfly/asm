@@ -32,7 +32,7 @@ AI 驱动的 coding agent 让并行工作效率飙升，但也带来了一个新
 | 标识 | Agent | 恢复能力 | 命令 |
 |------|-------|---------|------|
 | **CC** | Claude Code | 完整恢复 | `claude -r <session-id>` |
-| **CX** | Codex | 完整恢复 | `codex --resume <thread-id>` |
+| **CX** | Codex | 完整恢复 | `codex resume <thread-id>` |
 | **CR** | Cursor | 打开 workspace | `cursor <directory>` |
 | **OC** | OpenCode | 完整恢复 | `opencode --session <session-id>` |
 

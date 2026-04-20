@@ -263,7 +263,7 @@ ${chalk.bold("About")}
 ${chalk.bold("Supported Agents")}
 
   ${chalk.magenta("CC")}  Claude Code    ${chalk.green("full resume")}   claude -r <id>
-  ${chalk.green("CX")}  Codex          ${chalk.green("full resume")}   codex --resume <id>
+  ${chalk.green("CX")}  Codex          ${chalk.green("full resume")}   codex resume <id>
   ${chalk.blue("CR")}  Cursor         ${chalk.yellow("open workspace")}  cursor <dir>
   ${chalk.cyan("OC")}  OpenCode       ${chalk.green("full resume")}   opencode --session <id>
 
