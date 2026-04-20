@@ -43,16 +43,9 @@ AI 驱动的 coding agent 让并行工作效率飙升，但也带来了一个新
 
 需要 [Node.js](https://nodejs.org/) 22 或更高版本。
 
-### 从 npm 安装（推荐）
+### 从 GitHub 安装（推荐）
 
 ```bash
-npm install -g agent-sessions-manager
-```
-
-### 从 GitHub 安装
-
-```bash
-# 直接安装，无需手动 clone
 npm install -g github:xctrlfly/asm
 ```
 
@@ -60,7 +53,7 @@ npm install -g github:xctrlfly/asm
 
 ```bash
 git clone https://github.com/xctrlfly/asm.git
-cd agent-sessions-manager
+cd asm
 npm install
 npm run build
 npm link
@@ -276,7 +269,7 @@ src/
 
 ```bash
 git clone https://github.com/xctrlfly/asm.git
-cd agent-sessions-manager
+cd asm
 npm install
 npm run dev       # 监听模式构建
 npm link          # 全局安装用于测试

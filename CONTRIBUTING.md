@@ -6,7 +6,7 @@
 
 ```bash
 git clone https://github.com/xctrlfly/asm.git
-cd agent-sessions-manager
+cd asm
 npm install
 npm run build     # 构建一次
 npm run dev       # 监听模式构建

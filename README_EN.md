@@ -43,16 +43,9 @@ Different agents, different directories, different git branches. You remember *d
 
 Requires [Node.js](https://nodejs.org/) 22 or later.
 
-### From npm (recommended)
+### From GitHub (recommended)
 
 ```bash
-npm install -g agent-sessions-manager
-```
-
-### From GitHub
-
-```bash
-# Install directly, no manual clone needed
 npm install -g github:xctrlfly/asm
 ```
 
@@ -60,7 +53,7 @@ npm install -g github:xctrlfly/asm
 
 ```bash
 git clone https://github.com/xctrlfly/asm.git
-cd agent-sessions-manager
+cd asm
 npm install
 npm run build
 npm link
@@ -252,7 +245,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full step-by-step guide.
 
 ```bash
 git clone https://github.com/xctrlfly/asm.git
-cd agent-sessions-manager
+cd asm
 npm install
 npm run dev       # watch mode
 npm link          # global install for testing
