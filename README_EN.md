@@ -22,7 +22,9 @@ Different agents, different directories, different git branches. You remember *d
 - **Smart titles**: extracts meaningful titles from session names, first messages, custom titles, and git branches.
 - **Flexible filtering**: by agent type, working directory, time range, or keyword.
 - **Message history**: preview conversation history inline (`h` key) or via `asm history <id>`.
-- **Session cache**: mtime-based incremental caching — only re-scans agents whose data has changed.
+- **Safe deletion**: archive or trash sessions via `d` key or `asm delete <id>` (recoverable).
+- **Session cache**: mtime-based incremental caching — only re-scans agents whose data has changed (`-r` to force refresh).
+- **Dynamic path detection**: auto-detects agent data directories across platforms, with env var and custom path support.
 - **Extensible**: adding a new agent is one file implementing a simple interface.
 
 ## Supported Agents
@@ -32,10 +34,10 @@ Different agents, different directories, different git branches. You remember *d
 | **CC** | Claude Code | Full resume | `claude -r <session-id>` |
 | **CX** | Codex | Full resume | `codex --resume <thread-id>` |
 | **CR** | Cursor | Open workspace | `cursor <directory>` |
-| **OC** | OpenCode | Open workspace | `opencode` in working directory |
+| **OC** | OpenCode | Full resume | `opencode --session <session-id>` |
 
-> **Full resume** = restores the exact conversation context.
-> **Open workspace** = opens the project directory (agent manages sessions internally).
+> **Full resume** = `cd` to directory + restore the exact conversation context.
+> **Open workspace** = opens the project directory (Cursor manages sessions internally within IDE).
 
 ## Installation
 
@@ -95,7 +97,7 @@ This opens the interactive session browser:
  │  CR Debug pagination comp      ~/Projects/web…   7 days ago      │
  │  ...                                                    [1-15/85]│
  └──────────────────────────────────────────────────────────────────┘
-  Enter resume  ↑↓ navigate  Tab filter  / search  h history  ? help
+  Enter resume  ↑↓ navigate  Tab filter  / search  h history  d delete  ? help
 ```
 
 #### Keybindings
@@ -107,6 +109,7 @@ This opens the interactive session browser:
 | `/` | Enter search mode (fuzzy match) |
 | `Tab` | Cycle agent filter (All → Claude Code → Codex → Cursor → OpenCode) |
 | `h` | Preview message history of selected session |
+| `d` | Delete/archive selected session (with confirmation) |
 | `?` | Show help overlay |
 | `q` or `Esc` | Quit |
 
@@ -130,6 +133,9 @@ asm list --dir ~/Projects
 
 # Combine filters
 asm list -a claude-code -s 30d --id
+
+# Force refresh cache
+asm list --refresh
 ```
 
 ### Search
@@ -165,6 +171,21 @@ asm history "login"
 asm history a4b0af81
 ```
 
+### Delete a session
+
+```bash
+# Delete with confirmation prompt
+asm delete ff9a1d0e
+
+# Skip confirmation
+asm delete ff9a1d0e --force
+```
+
+Deletion is safe and recoverable:
+- **Claude Code**: moves `.jsonl` file to `~/.config/asm/trash/`
+- **OpenCode / Codex**: soft-delete (marks as archived), recoverable via SQL
+- **Cursor**: backs up to `~/.config/asm/trash/` before deleting
+
 ## Configuration
 
 Configuration is stored at `~/.config/asm/config.json`.
@@ -199,7 +220,7 @@ asm config path
 
 ## How it works
 
-`asm` is **read-only** — it never modifies your agent data.
+`asm` is read-only by default — scanning and searching never modify agent data. Deletion uses safe strategies (archive/trash), see "Delete a session" above.
 
 1. **Scan**: Each provider reads its agent's local session storage (JSONL files, SQLite databases, JSON state files).
 2. **Cache**: Results are cached at `~/.config/asm/cache.json` with mtime-based fingerprints. On subsequent runs, only agents with changed data are re-scanned.
@@ -213,7 +234,9 @@ asm config path
 | Claude Code | `~/.claude/projects/<path>/<uuid>.jsonl` | JSONL |
 | Codex | `~/.codex/state_5.sqlite` | SQLite |
 | Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | SQLite |
-| OpenCode | `~/Library/Application Support/ai.opencode.desktop/opencode.global.dat` | JSON |
+| OpenCode | `~/.local/share/opencode/opencode.db` | SQLite |
+
+> These are default paths. `asm` auto-detects multiple candidate locations (env vars, XDG spec, platform differences). Custom paths can be set via `config.paths`.
 
 ## Adding a new agent
 

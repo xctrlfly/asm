@@ -22,7 +22,9 @@ AI 驱动的 coding agent 让并行工作效率飙升，但也带来了一个新
 - **智能标题**：从会话名称、首条消息、自定义标题、git 分支中提取有意义的标题
 - **灵活过滤**：按 agent 类型、工作目录、时间范围、关键词筛选
 - **消息历史**：在 TUI 中按 `h` 预览对话历史，或用 `asm history <id>` 查看
-- **增量缓存**：基于文件修改时间的缓存机制，只有数据变化的 agent 才重新扫描
+- **安全删除**：在 TUI 中按 `d` 或用 `asm delete <id>` 清理不需要的会话（归档/移到回收站，可恢复）
+- **增量缓存**：基于文件修改时间的缓存机制，只有数据变化的 agent 才重新扫描（`-r` 强制刷新）
+- **动态路径检测**：自动检测各 agent 的数据目录，支持多平台、环境变量和自定义路径
 - **易于扩展**：添加新 agent 只需实现一个简单接口
 
 ## 支持的 Agent
@@ -32,10 +34,10 @@ AI 驱动的 coding agent 让并行工作效率飙升，但也带来了一个新
 | **CC** | Claude Code | 完整恢复 | `claude -r <session-id>` |
 | **CX** | Codex | 完整恢复 | `codex --resume <thread-id>` |
 | **CR** | Cursor | 打开 workspace | `cursor <directory>` |
-| **OC** | OpenCode | 打开 workspace | `opencode` |
+| **OC** | OpenCode | 完整恢复 | `opencode --session <session-id>` |
 
-> **完整恢复** = 恢复到具体的对话上下文
-> **打开 workspace** = 打开项目目录（agent 内部管理会话）
+> **完整恢复** = cd 到对应目录 + 恢复到具体的对话上下文
+> **打开 workspace** = 打开项目目录（Cursor 在 IDE 内部管理会话，无法从 CLI 定位到具体会话）
 
 ## 安装
 
@@ -95,7 +97,7 @@ asm
  │  CR 调试分页组件                   ~/Projects/web…   7 days ago      │
  │  ...                                                    [1-15/85]│
  └──────────────────────────────────────────────────────────────────┘
-  Enter 恢复  ↑↓ 导航  Tab 过滤  / 搜索  h 历史  ? 帮助  q 退出
+  Enter 恢复  ↑↓ 导航  Tab 过滤  / 搜索  h 历史  d 删除  ? 帮助  q 退出
 ```
 
 #### 快捷键
@@ -107,6 +109,7 @@ asm
 | `/` | 进入搜索模式（模糊匹配） |
 | `Tab` | 切换 Agent 过滤器（全部 → Claude Code → Codex → Cursor → OpenCode） |
 | `h` | 预览选中会话的对话历史 |
+| `d` | 删除/归档选中会话（有确认步骤） |
 | `?` | 显示帮助面板 |
 | `q` 或 `Esc` | 退出 |
 
@@ -130,6 +133,9 @@ asm list --dir ~/Projects
 
 # 组合过滤
 asm list -a claude-code -s 30d --id
+
+# 强制刷新缓存（跳过增量缓存，重新扫描所有 agent）
+asm list --refresh
 ```
 
 ### 搜索
@@ -165,6 +171,21 @@ asm history "登录"
 asm history a4b0af81
 ```
 
+### 删除会话
+
+```bash
+# 删除指定会话（有确认提示）
+asm delete ff9a1d0e
+
+# 跳过确认直接删除
+asm delete ff9a1d0e --force
+```
+
+删除操作是安全的：
+- **Claude Code**：将 `.jsonl` 文件移到回收目录 `~/.config/asm/trash/`，可手动移回恢复
+- **OpenCode / Codex**：软删除（标记归档），不删除数据，可通过 SQL 恢复
+- **Cursor**：先备份到回收目录，再删除
+
 ## 配置
 
 配置文件位于 `~/.config/asm/config.json`。
@@ -199,7 +220,7 @@ asm config path
 
 ## 工作原理
 
-`asm` 是 **只读** 的——它不会修改任何 agent 的数据。
+`asm` 默认只读——扫描和搜索不会修改任何 agent 的数据。删除操作采用安全策略（归档/移到回收站），详见上方"删除会话"章节。
 
 1. **扫描**：每个 provider 读取对应 agent 的本地存储（JSONL 文件、SQLite 数据库、JSON 状态文件）
 2. **缓存**：扫描结果缓存在 `~/.config/asm/cache.json`，基于文件修改时间判断是否需要重新扫描
@@ -213,25 +234,29 @@ asm config path
 | Claude Code | `~/.claude/projects/<编码路径>/<uuid>.jsonl` | JSONL |
 | Codex | `~/.codex/state_5.sqlite` | SQLite |
 | Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | SQLite |
-| OpenCode | `~/Library/Application Support/ai.opencode.desktop/opencode.global.dat` | JSON |
+| OpenCode | `~/.local/share/opencode/opencode.db` | SQLite |
+
+> 以上为默认路径。asm 会自动检测多个候选位置（环境变量、XDG 规范、平台差异），也可通过 `config.paths` 自定义。
 
 ## 项目结构
 
 ```
 src/
-├── cli.tsx                 # CLI 入口（Commander.js）
+├── cli.tsx                 # CLI 入口（Commander.js，7 个子命令）
 ├── core/
 │   ├── aggregator.ts       # 会话聚合 + fuse.js 模糊搜索
 │   ├── cache.ts            # 基于 mtime 的增量缓存
 │   ├── config.ts           # 配置文件管理
+│   ├── deleter.ts          # 安全删除/归档会话 + 回收站机制
 │   ├── history.ts          # 对话历史提取
-│   └── opener.ts           # cd + resume 命令执行
+│   ├── opener.ts           # cd + resume 命令执行
+│   └── paths.ts            # 动态数据路径检测（多候选 + 平台适配）
 ├── providers/
 │   ├── types.ts            # 统一会话模型 + Provider 接口
-│   ├── claude-code.ts      # Claude Code（JSONL 解析）
+│   ├── claude-code.ts      # Claude Code（JSONL 流式解析）
 │   ├── codex.ts            # Codex（SQLite）
 │   ├── cursor.ts           # Cursor（SQLite + workspace 映射）
-│   ├── opencode.ts         # OpenCode（dat + 全局状态）
+│   ├── opencode.ts         # OpenCode（SQLite）
 │   └── registry.ts         # Provider 注册中心
 └── ui/
     └── App.tsx             # 交互式 TUI（Ink / React）

@@ -17,19 +17,21 @@ npm link          # 全局安装 `asm` 用于测试
 
 ```
 src/
-├── cli.tsx                 # CLI 入口（Commander.js，命令定义 + 缓存集成）
+├── cli.tsx                 # CLI 入口（Commander.js，7 个子命令 + 缓存集成）
 ├── core/
 │   ├── aggregator.ts       # 会话聚合 + fuse.js 模糊搜索
 │   ├── cache.ts            # 基于 mtime 的增量缓存（~/.config/asm/cache.json）
 │   ├── config.ts           # 配置文件管理（~/.config/asm/config.json）
+│   ├── deleter.ts          # 安全删除/归档会话 + 回收站（~/.config/asm/trash/）
 │   ├── history.ts          # 各 agent 的对话历史提取
-│   └── opener.ts           # cd + resume 命令执行
+│   ├── opener.ts           # cd + resume 命令执行
+│   └── paths.ts            # 动态数据路径检测（多候选 + 环境变量 + 平台适配）
 ├── providers/
 │   ├── types.ts            # UnifiedSession 模型 + SessionProvider 接口 + AgentConfig
 │   ├── claude-code.ts      # Claude Code provider（JSONL 流式解析）
 │   ├── codex.ts            # Codex provider（SQLite threads 表）
 │   ├── cursor.ts           # Cursor provider（SQLite + workspace 映射）
-│   ├── opencode.ts         # OpenCode provider（dat + 全局状态）
+│   ├── opencode.ts         # OpenCode provider（SQLite session 表）
 │   └── registry.ts         # Provider 注册中心 + 可用性检测
 └── ui/
     └── App.tsx             # 交互式 TUI（Ink / React）
@@ -73,8 +75,10 @@ export class MyAgentProvider implements SessionProvider {
 import { MyAgentProvider } from "./providers/my-agent.js";
 
 // 在 createRegistry() 函数中：
-if (!disabled.has("my-agent")) registry.register(new MyAgentProvider());
+if (!disabled.has("my-agent")) registry.register(new MyAgentProvider(paths["my-agent"]));
 ```
+
+注意：provider 构造函数接受可选的 `dataPath` 参数，用于用户自定义路径覆盖默认检测。
 
 ### 第 3 步：添加类型和配置
 
@@ -100,11 +104,19 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
 
 在 `src/core/history.ts` 的 `getSessionHistory()` 中添加对应的 case。
 
-### 第 5 步：更新缓存指纹
+### 第 5 步：添加删除支持
 
-在 `src/core/cache.ts` 中添加数据路径和 fingerprint 计算策略。
+在 `src/core/deleter.ts` 的 `deleteSession()` 中添加对应的删除策略（归档/移到回收站）。
 
-### 第 6 步：更新文档
+### 第 6 步：添加路径候选
+
+在 `src/core/paths.ts` 的 `getAgentCandidates()` 中添加新 agent 的候选路径列表。
+
+### 第 7 步：更新缓存指纹
+
+在 `src/core/cache.ts` 中添加 fingerprint 计算策略。
+
+### 第 8 步：更新文档
 
 - 更新 `README.md` 中的 Agent 支持表
 - 更新 `src/cli.tsx` 和 `src/ui/App.tsx` 中的帮助文本
@@ -115,7 +127,7 @@ export const AGENT_CONFIGS: Record<AgentType, AgentConfig> = {
 - ESM 模块（import/export，import 路径带 `.js` 后缀）
 - 内置模块使用 `node:` 前缀（`node:fs`、`node:path` 等）
 - 所有文件 I/O 操作用 try/catch 包裹
-- SQLite 数据库以 `readonly: true` 模式打开——我们不修改任何 agent 的数据
+- SQLite 数据库扫描时以 `readonly: true` 模式打开；仅删除操作以写入模式打开
 
 ## 测试
 
@@ -127,6 +139,7 @@ asm list                    # 验证所有 agent 被检测到
 asm list --agent <name>     # 验证特定 agent
 asm search "关键词"         # 验证搜索
 asm history <id> --limit 5  # 验证历史提取
+asm delete <id>             # 验证删除（建议先用测试会话）
 ```
 
 ## 提交变更
