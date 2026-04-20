@@ -1,26 +1,17 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import type { UnifiedSession, AgentType } from "../providers/types.js";
+import type { UnifiedSession } from "../providers/types.js";
 
 /**
- * 各 Agent 的 resume 命令构建规则
+ * 构建 resume 命令。直接使用 provider 生成的 resumeCommand 字段，
+ * 确保命令定义只有一个来源，避免 opener 和 provider 不一致。
  */
 function buildResumeCommand(session: UnifiedSession): {
-  /** agent CLI 命令及参数 */
   command: string;
-  /** 工作目录 */
   cwd: string;
 } {
   const cwd = session.workingDirectory || process.cwd();
-
-  const strategies: Record<AgentType, () => string> = {
-    "claude-code": () => `claude -r ${session.id}`,
-    codex: () => `codex --resume ${session.id}`,
-    cursor: () => `cursor "${cwd}"`,
-    opencode: () => "opencode",
-  };
-
-  return { command: strategies[session.agent](), cwd };
+  return { command: session.resumeCommand, cwd };
 }
 
 /**
