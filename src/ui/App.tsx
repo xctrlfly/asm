@@ -399,6 +399,7 @@ export function App({ sessions, onSelect }: AppProps) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteResult, setDeleteResult] = useState<DeleteResult | null>(null);
   const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
+  const [resumeError, setResumeError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [agentFilterIdx, setAgentFilterIdx] = useState(0);
@@ -501,6 +502,9 @@ export function App({ sessions, onSelect }: AppProps) {
     }
 
     // ── 普通模式 ──
+    // 任意操作清除 resume 错误提示
+    if (resumeError) setResumeError(null);
+
     if (input === "q" || key.escape) {
       exit();
       return;
@@ -561,6 +565,14 @@ export function App({ sessions, onSelect }: AppProps) {
     if (key.return) {
       const session = filteredSessions[selectedIndex];
       if (session) {
+        if (!session.canResume) {
+          // 无法恢复的会话（如 Cursor 无工作目录），显示提示而非报错
+          setResumeError(
+            `${AGENT_CONFIGS[session.agent].displayName} 的该会话无法从 CLI 恢复` +
+            (session.agent === "cursor" ? "（Cursor 会话需在 IDE 内打开）" : ""),
+          );
+          return;
+        }
         onSelect(session);
         exit();
       }
@@ -705,6 +717,13 @@ export function App({ sessions, onSelect }: AppProps) {
           </Box>
         )}
       </Box>
+
+      {/* resume 错误提示 */}
+      {resumeError && (
+        <Box paddingX={1}>
+          <Text color="yellow">{resumeError}</Text>
+        </Box>
+      )}
 
       {/* 底部帮助栏 */}
       <Box paddingX={1} gap={2}>
