@@ -567,10 +567,10 @@ export function App({ sessions, onSelect }: AppProps) {
       if (session) {
         if (!session.canResume) {
           // 无法恢复的会话（如 Cursor 无工作目录），显示提示而非报错
-          setResumeError(
-            `${AGENT_CONFIGS[session.agent].displayName} 的该会话无法从 CLI 恢复` +
-            (session.agent === "cursor" ? "（Cursor 会话需在 IDE 内打开）" : ""),
-          );
+          const hint = session.agent === "cursor"
+            ? "该会话来自 Cursor IDE，需在 IDE 内打开（非 CLI Agent 会话）"
+            : `${AGENT_CONFIGS[session.agent].displayName} 的该会话无法从 CLI 恢复`;
+          setResumeError(hint);
           return;
         }
         onSelect(session);

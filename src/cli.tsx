@@ -367,6 +367,13 @@ program
           `Session "${session.title}" (${session.agent}) does not support resume.`,
         ),
       );
+      if (session.agent === "cursor") {
+        console.error(
+          chalk.gray(
+            "该会话来自 Cursor IDE，需在 IDE 内打开（非 CLI Agent 会话）。",
+          ),
+        );
+      }
       process.exit(1);
     }
 
