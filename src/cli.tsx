@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createInterface } from "node:readline";
 import { Command } from "commander";
 import chalk from "chalk";
 import { render } from "ink";
@@ -11,6 +12,7 @@ import { SessionCache } from "./core/cache.js";
 import { ConfigManager, type AsmConfig } from "./core/config.js";
 import { openSession } from "./core/opener.js";
 import { getSessionHistory } from "./core/history.js";
+import { deleteSession, getDeleteDescription } from "./core/deleter.js";
 import { App } from "./ui/App.js";
 import {
   AGENT_CONFIGS,
@@ -31,23 +33,28 @@ import { OpenCodeProvider } from "./providers/opencode.js";
 
 function createRegistry(config?: AsmConfig): ProviderRegistry {
   const disabled = new Set(config?.disabledAgents ?? []);
+  const paths = config?.paths ?? {};
   const registry = new ProviderRegistry();
-  if (!disabled.has("claude-code")) registry.register(new ClaudeCodeProvider());
-  if (!disabled.has("codex")) registry.register(new CodexProvider());
-  if (!disabled.has("cursor")) registry.register(new CursorProvider());
-  if (!disabled.has("opencode")) registry.register(new OpenCodeProvider());
+  if (!disabled.has("claude-code")) registry.register(new ClaudeCodeProvider(paths["claude-code"]));
+  if (!disabled.has("codex")) registry.register(new CodexProvider(paths["codex"]));
+  if (!disabled.has("cursor")) registry.register(new CursorProvider(paths["cursor"]));
+  if (!disabled.has("opencode")) registry.register(new OpenCodeProvider(paths["opencode"]));
   return registry;
 }
 
 /**
  * 带缓存的会话获取。对每个 provider 独立判断缓存是否有效，
  * 命中缓存的 provider 不重新扫描，未命中的重新扫描并更新缓存。
+ *
+ * @param refresh 为 true 时跳过缓存，强制全量扫描
  */
 async function getCachedSessions(
   registry: ProviderRegistry,
+  refresh = false,
+  config?: AsmConfig,
 ): Promise<UnifiedSession[]> {
-  const cache = new SessionCache();
-  const cacheData = cache.load();
+  const cache = new SessionCache(undefined, config?.paths);
+  const cacheData = refresh ? { version: 1 as const, providers: {} } : cache.load();
   const providers = await registry.getAvailableProviders();
 
   const allSessions: UnifiedSession[] = [];
@@ -55,11 +62,11 @@ async function getCachedSessions(
   for (const provider of providers) {
     const cached = cacheData.providers[provider.name];
 
-    if (cached && cache.isValid(provider.name, cached)) {
+    if (!refresh && cached && cache.isValid(provider.name, cached)) {
       // 缓存命中，直接反序列化
       allSessions.push(...SessionCache.deserializeSessions(cached.sessions));
     } else {
-      // 缓存未命中，重新扫描
+      // 缓存未命中或强制刷新，重新扫描
       try {
         const sessions = await provider.getSessions();
         allSessions.push(...sessions);
@@ -108,8 +115,61 @@ function parseSince(value: string): Date {
   return new Date(now - num * (ms[unit] ?? 86400_000));
 }
 
+/**
+ * 计算字符串的显示宽度（中文/全角字符占 2 列，ASCII 占 1 列）
+ */
+function displayWidth(str: string): number {
+  let width = 0;
+  for (const ch of str) {
+    const code = ch.codePointAt(0) ?? 0;
+    // CJK Unified Ideographs, CJK Compatibility, Fullwidth Forms, etc.
+    if (
+      (code >= 0x2e80 && code <= 0x9fff) ||  // CJK
+      (code >= 0xf900 && code <= 0xfaff) ||  // CJK Compatibility
+      (code >= 0xfe30 && code <= 0xfe4f) ||  // CJK Compatibility Forms
+      (code >= 0xff00 && code <= 0xff60) ||  // Fullwidth Forms
+      (code >= 0xffe0 && code <= 0xffe6) ||  // Fullwidth Signs
+      (code >= 0x20000 && code <= 0x2fa1f)   // CJK Extension
+    ) {
+      width += 2;
+    } else {
+      width += 1;
+    }
+  }
+  return width;
+}
+
+/** 按显示宽度截断字符串 */
+function truncate(str: string, maxWidth: number): string {
+  let width = 0;
+  let i = 0;
+  for (const ch of str) {
+    const code = ch.codePointAt(0) ?? 0;
+    const cw =
+      (code >= 0x2e80 && code <= 0x9fff) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe30 && code <= 0xfe4f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6) ||
+      (code >= 0x20000 && code <= 0x2fa1f)
+        ? 2 : 1;
+    if (width + cw > maxWidth - 1) {
+      return str.slice(0, i) + "…";
+    }
+    width += cw;
+    i += ch.length;
+  }
+  return str;
+}
+
+/** 按显示宽度右填充空格 */
+function padDisplay(str: string, targetWidth: number): string {
+  const w = displayWidth(str);
+  return w >= targetWidth ? str : str + " ".repeat(targetWidth - w);
+}
+
 /** 缩短路径 */
-function shortenPath(p: string, maxLen = 30): string {
+function shortenPath(p: string, maxLen = 24): string {
   if (!p) return "";
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "";
   let display = p;
@@ -117,7 +177,7 @@ function shortenPath(p: string, maxLen = 30): string {
     display = "~" + display.slice(home.length);
   }
   if (display.length <= maxLen) return display;
-  return display.slice(0, 12) + "..." + display.slice(-15);
+  return display.slice(0, 10) + "…" + display.slice(-(maxLen - 11));
 }
 
 /** 相对时间 */
@@ -129,6 +189,17 @@ function relativeTime(date: Date): string {
   }
 }
 
+/** 交互式确认 */
+function confirm(message: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(message, (answer) => {
+      rl.close();
+      resolve(answer.toLowerCase() === "y" || answer.toLowerCase() === "yes");
+    });
+  });
+}
+
 /** Agent badge 着色 */
 function agentBadge(agent: AgentType): string {
   const config = AGENT_CONFIGS[agent];
@@ -138,7 +209,13 @@ function agentBadge(agent: AgentType): string {
   return colorFn ? colorFn(config.icon) : config.icon;
 }
 
-/** 非交互式表格输出 */
+// ── 列宽常量（和 TUI App.tsx 保持一致）──────────────────────
+const COL_TITLE  = 36;
+const COL_DIR    = 26;
+const COL_BRANCH = 20;
+const COL_TIME   = 16;
+
+/** 非交互式表格输出 — 列顺序和 TUI 一致: badge title dir branch time */
 function printSessionTable(sessions: UnifiedSession[], showId = false): void {
   if (sessions.length === 0) {
     console.log(chalk.gray("No sessions found."));
@@ -146,14 +223,16 @@ function printSessionTable(sessions: UnifiedSession[], showId = false): void {
   }
 
   for (const s of sessions) {
-    const badge = agentBadge(s.agent).padEnd(4);
-    const idHint = showId ? chalk.gray(s.id.slice(0, 8) + " ") : "";
-    const time = chalk.gray(relativeTime(s.updatedAt).padEnd(16));
-    const title = s.title.length > 45 ? s.title.slice(0, 42) + "..." : s.title;
-    const dir = chalk.gray(shortenPath(s.workingDirectory).padEnd(30));
-    const branch = s.gitBranch ? chalk.green(s.gitBranch) : "";
+    const badge = agentBadge(s.agent);
+    const idHint = showId ? chalk.gray(s.id.slice(0, 8)) + " " : "";
+    const title  = padDisplay(truncate(s.title, COL_TITLE), COL_TITLE);
+    const dir    = chalk.gray(padDisplay(shortenPath(s.workingDirectory, COL_DIR), COL_DIR));
+    const branch = s.gitBranch
+      ? chalk.green(padDisplay(truncate(s.gitBranch, COL_BRANCH), COL_BRANCH))
+      : " ".repeat(COL_BRANCH);
+    const time   = chalk.gray(relativeTime(s.updatedAt));
 
-    console.log(`${badge} ${idHint}${time} ${title.padEnd(45)} ${dir} ${branch}`);
+    console.log(`${badge} ${idHint}${title} ${dir} ${branch} ${time}`);
   }
 
   console.log(chalk.gray(`\nTotal: ${sessions.length} sessions`));
@@ -186,7 +265,7 @@ ${chalk.bold("Supported Agents")}
   ${chalk.magenta("CC")}  Claude Code    ${chalk.green("full resume")}   claude -r <id>
   ${chalk.green("CX")}  Codex          ${chalk.green("full resume")}   codex --resume <id>
   ${chalk.blue("CR")}  Cursor         ${chalk.yellow("open workspace")}  cursor <dir>
-  ${chalk.cyan("OC")}  OpenCode       ${chalk.yellow("open workspace")}  opencode
+  ${chalk.cyan("OC")}  OpenCode       ${chalk.green("full resume")}   opencode --session <id>
 
 ${chalk.bold("Examples")}
 
@@ -209,10 +288,11 @@ program
   .option("-s, --since <duration>", "Only show sessions updated within duration (e.g. 7d, 30d)")
   .option("-l, --limit <number>", "Limit number of results", parseInt)
   .option("--id", "Show session ID prefix (for use with asm open/history)")
+  .option("-r, --refresh", "Force refresh, skip cache")
   .action(async (opts) => {
     const config = ConfigManager.load();
     const registry = createRegistry(config);
-    const all = await getCachedSessions(registry);
+    const all = await getCachedSessions(registry, opts.refresh, config);
 
     const filterOptions: FilterOptions = {};
     if (opts.agent) {
@@ -243,10 +323,11 @@ program
   .option("-a, --agent <agent>", "Filter by agent type")
   .option("-l, --limit <number>", "Limit number of results", parseInt)
   .option("--id", "Show session ID prefix")
+  .option("-r, --refresh", "Force refresh, skip cache")
   .action(async (keyword: string, opts) => {
     const config = ConfigManager.load();
     const registry = createRegistry(config);
-    const all = await getCachedSessions(registry);
+    const all = await getCachedSessions(registry, opts.refresh, config);
 
     const filterOptions: FilterOptions = {
       keyword,
@@ -271,7 +352,7 @@ program
   .action(async (id: string) => {
     const config = ConfigManager.load();
     const registry = createRegistry(config);
-    const sessions = await getCachedSessions(registry);
+    const sessions = await getCachedSessions(registry, false, config);
 
     // 支持 ID 前缀匹配
     const session = sessions.find((s) => s.id === id || s.id.startsWith(id));
@@ -300,7 +381,7 @@ program
   .action(async (id: string, opts: { limit?: number }) => {
     const config = ConfigManager.load();
     const registry = createRegistry(config);
-    const sessions = await getCachedSessions(registry);
+    const sessions = await getCachedSessions(registry, false, config);
 
     // ID 前缀匹配 + 标题模糊匹配
     let matches = sessions.filter((s) => s.id.startsWith(id));
@@ -380,11 +461,85 @@ program
     console.log(chalk.gray(`Total: ${history.messages.length} messages`));
   });
 
+// asm delete <id>
+program
+  .command("delete <id>")
+  .description("Delete/archive a session (with safety backup)")
+  .option("-f, --force", "Skip confirmation prompt")
+  .action(async (id: string, opts: { force?: boolean }) => {
+    const config = ConfigManager.load();
+    const registry = createRegistry(config);
+    const sessions = await getCachedSessions(registry, false, config);
+
+    // ID 前缀匹配
+    let matches = sessions.filter((s) => s.id.startsWith(id));
+    if (matches.length === 0) {
+      // fallback: 按标题包含关键词搜索
+      const kw = id.toLowerCase();
+      matches = sessions.filter((s) => s.title.toLowerCase().includes(kw));
+    }
+
+    if (matches.length === 0) {
+      console.error(chalk.red(`No session found matching: ${id}`));
+      console.error(chalk.gray(`Tip: use "asm list --id" to see session IDs`));
+      process.exit(1);
+    }
+
+    if (matches.length > 1) {
+      console.error(
+        chalk.yellow(
+          `Ambiguous ID prefix "${id}" matches ${matches.length} sessions. Please be more specific:`,
+        ),
+      );
+      for (const s of matches.slice(0, 10)) {
+        const badge = agentBadge(s.agent);
+        console.error(`  ${badge} ${s.id}  ${s.title}`);
+      }
+      if (matches.length > 10) {
+        console.error(chalk.gray(`  ... and ${matches.length - 10} more`));
+      }
+      process.exit(1);
+    }
+
+    const session = matches[0]!;
+
+    // 显示会话信息
+    console.log(chalk.bold("确定要删除以下会话？"));
+    console.log(
+      `  ${agentBadge(session.agent)}  ${session.title}  ${chalk.gray(shortenPath(session.workingDirectory))}  ${chalk.gray(relativeTime(session.updatedAt))}`,
+    );
+    console.log(
+      chalk.gray(`  操作: ${getDeleteDescription(session.agent)}`),
+    );
+    console.log();
+
+    // 确认
+    if (!opts.force) {
+      const confirmed = await confirm(`输入 ${chalk.bold("y")} 确认删除: `);
+      if (!confirmed) {
+        console.log(chalk.gray("已取消"));
+        process.exit(0);
+      }
+    }
+
+    // 执行删除
+    const result = await deleteSession(session);
+    if (result.success) {
+      console.log(chalk.green(`✓ ${result.message}`));
+      if (result.recoveryHint) {
+        console.log(chalk.gray(`  恢复提示: ${result.recoveryHint}`));
+      }
+    } else {
+      console.error(chalk.red(`✗ ${result.message}`));
+      process.exit(1);
+    }
+  });
+
 // 默认命令: 交互式 TUI
 program.action(async () => {
   const config = ConfigManager.load();
   const registry = createRegistry(config);
-  const sessions = await getCachedSessions(registry);
+  const sessions = await getCachedSessions(registry, false, config);
 
   if (sessions.length === 0) {
     console.log(chalk.gray("No sessions found from any agent."));

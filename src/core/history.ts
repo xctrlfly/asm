@@ -259,11 +259,83 @@ function getCursorHistory(sessionId: string): HistoryMessage[] {
 }
 
 // ---------------------------------------------------------------------------
-// OpenCode — 不存储消息历史
+// OpenCode — ~/.local/share/opencode/opencode.db → message 表
 // ---------------------------------------------------------------------------
 
-function getOpenCodeHistory(): HistoryMessage[] {
-  return [];
+const OPENCODE_DB_PATH = path.join(
+  os.homedir(),
+  ".local",
+  "share",
+  "opencode",
+  "opencode.db",
+);
+
+/**
+ * OpenCode 的消息结构:
+ * - message 表: 消息元信息 (role, time, model 等)
+ * - part 表: 消息的实际内容片段 (type: "text" → text 字段)
+ *
+ * 通过 JOIN 获取每条消息的文本内容。
+ */
+interface OpenCodePartRow {
+  message_role: string;
+  part_data: string;
+  time_created: number;
+}
+
+function getOpenCodeHistory(sessionId: string): HistoryMessage[] {
+  if (!fs.existsSync(OPENCODE_DB_PATH)) return [];
+
+  let db: InstanceType<typeof Database>;
+  try {
+    db = new Database(OPENCODE_DB_PATH, { readonly: true });
+  } catch {
+    return [];
+  }
+
+  try {
+    // 从 message + part 联合查询，提取文本类型的 part
+    const rows = db
+      .prepare(
+        `SELECT
+           json_extract(m.data, '$.role') AS message_role,
+           p.data AS part_data,
+           p.time_created
+         FROM part p
+         JOIN message m ON p.message_id = m.id
+         WHERE p.session_id = ?
+         ORDER BY p.time_created ASC`,
+      )
+      .all(sessionId) as OpenCodePartRow[];
+
+    const messages: HistoryMessage[] = [];
+    for (const row of rows) {
+      try {
+        const role: "user" | "assistant" | "system" =
+          row.message_role === "user" ? "user"
+          : row.message_role === "assistant" ? "assistant"
+          : "system";
+        if (role === "system") continue;
+
+        const partData = JSON.parse(row.part_data);
+        // 只提取 type: "text" 的 part
+        if (partData.type !== "text" || !partData.text) continue;
+
+        messages.push({
+          role,
+          content: partData.text,
+          timestamp: new Date(row.time_created),
+        });
+      } catch {
+        // 单条 part 解析失败跳过
+      }
+    }
+    return messages;
+  } catch {
+    return [];
+  } finally {
+    db.close();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -294,7 +366,7 @@ export async function getSessionHistory(
       messages = getCursorHistory(sessionId);
       break;
     case "opencode":
-      messages = getOpenCodeHistory();
+      messages = getOpenCodeHistory(sessionId);
       break;
     default:
       messages = [];

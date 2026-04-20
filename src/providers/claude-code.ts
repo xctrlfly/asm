@@ -7,12 +7,9 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
 import * as readline from "node:readline";
 import type { SessionProvider, UnifiedSession } from "./types.js";
-
-/** Claude Code 会话存储根目录 */
-const PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
+import { resolveAgentPath } from "../core/paths.js";
 
 // ─── JSONL 行类型定义 ────────────────────────────────────────────
 
@@ -286,9 +283,22 @@ export class ClaudeCodeProvider implements SessionProvider {
   readonly name = "claude-code" as const;
   readonly displayName = "Claude Code";
 
+  private readonly customPath?: string;
+
+  constructor(dataPath?: string) {
+    this.customPath = dataPath;
+  }
+
+  /** 动态解析 projects 目录路径 */
+  private resolveDataPath(): string | null {
+    return resolveAgentPath("claude-code", this.customPath);
+  }
+
   async isAvailable(): Promise<boolean> {
+    const projectsDir = this.resolveDataPath();
+    if (!projectsDir) return false;
     try {
-      const stat = await fs.promises.stat(PROJECTS_DIR);
+      const stat = await fs.promises.stat(projectsDir);
       return stat.isDirectory();
     } catch {
       return false;
@@ -296,12 +306,13 @@ export class ClaudeCodeProvider implements SessionProvider {
   }
 
   async getSessions(): Promise<UnifiedSession[]> {
-    if (!(await this.isAvailable())) return [];
+    const projectsDir = this.resolveDataPath();
+    if (!projectsDir) return [];
 
     // 列出所有项目目录
     let projectDirs: string[];
     try {
-      const entries = await fs.promises.readdir(PROJECTS_DIR, { withFileTypes: true });
+      const entries = await fs.promises.readdir(projectsDir, { withFileTypes: true });
       projectDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
     } catch {
       return [];
@@ -313,7 +324,7 @@ export class ClaudeCodeProvider implements SessionProvider {
       // 跳过特殊目录
       if (dirName === "memory" || dirName.startsWith(".")) continue;
 
-      const dirPath = path.join(PROJECTS_DIR, dirName);
+      const dirPath = path.join(projectsDir, dirName);
       let files: string[];
       try {
         files = await fs.promises.readdir(dirPath);

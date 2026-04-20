@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { UnifiedSession, AgentType } from "../providers/types.js";
+import { resolveAgentPath } from "./paths.js";
 
 // ─── 缓存数据结构 ────────────────────────────────────────────
 
@@ -44,45 +45,11 @@ export interface CacheData {
 
 const HOME = os.homedir();
 
-/** 各 provider 数据源关键路径 */
-const DATA_PATHS: Record<AgentType, string> = {
-  "claude-code": path.join(HOME, ".claude", "projects"),
-  codex: path.join(HOME, ".codex", "state_5.sqlite"),
-  cursor: (() => {
-    // macOS: ~/Library/Application Support/Cursor/User/globalStorage/state.vscdb
-    // Linux: ~/.config/Cursor/User/globalStorage/state.vscdb
-    if (process.platform === "darwin") {
-      return path.join(
-        HOME,
-        "Library",
-        "Application Support",
-        "Cursor",
-        "User",
-        "globalStorage",
-        "state.vscdb",
-      );
-    }
-    return path.join(
-      HOME,
-      ".config",
-      "Cursor",
-      "User",
-      "globalStorage",
-      "state.vscdb",
-    );
-  })(),
-  opencode: path.join(
-    HOME,
-    "Library",
-    "Application Support",
-    "ai.opencode.desktop",
-    "opencode.global.dat",
-  ),
-};
+/** 用户自定义路径映射类型 */
+export type AgentPaths = Partial<Record<AgentType, string>>;
 
 /** 缓存文件路径 */
-const CACHE_DIR = path.join(HOME, ".config", "asm");
-const CACHE_FILE = path.join(CACHE_DIR, "cache.json");
+const CACHE_FILE = path.join(HOME, ".config", "asm", "cache.json");
 
 // ─── SessionCache ────────────────────────────────────────────
 
@@ -94,9 +61,16 @@ const CACHE_FILE = path.join(CACHE_DIR, "cache.json");
  */
 export class SessionCache {
   private readonly cacheFile: string;
+  private readonly agentPaths: AgentPaths;
 
-  constructor(cacheFile?: string) {
+  constructor(cacheFile?: string, agentPaths?: AgentPaths) {
     this.cacheFile = cacheFile ?? CACHE_FILE;
+    this.agentPaths = agentPaths ?? {};
+  }
+
+  /** 动态解析指定 agent 的数据路径 */
+  private resolveDataPath(agent: AgentType): string | null {
+    return resolveAgentPath(agent, this.agentPaths[agent]);
   }
 
   // ── 持久化 ──────────────────────────────────────────────
@@ -131,15 +105,18 @@ export class SessionCache {
   /** 获取指定 provider 数据源的当前 fingerprint */
   getFingerprint(agent: AgentType): string {
     try {
+      const resolved = this.resolveDataPath(agent);
+      if (!resolved) return "";
+
       switch (agent) {
         case "claude-code":
-          return this.getClaudeCodeFingerprint();
+          return this.getClaudeCodeFingerprint(resolved);
         case "codex":
-          return this.getSingleFileFingerprint("codex", DATA_PATHS.codex);
+          return this.getSingleFileFingerprint("codex", resolved);
         case "cursor":
-          return this.getSingleFileFingerprint("cursor", DATA_PATHS.cursor);
+          return this.getSingleFileFingerprint("cursor", resolved);
         case "opencode":
-          return this.getSingleFileFingerprint("opencode", DATA_PATHS.opencode);
+          return this.getSingleFileFingerprint("opencode", resolved);
         default:
           return "";
       }
@@ -152,26 +129,41 @@ export class SessionCache {
 
   /**
    * Claude Code fingerprint 策略：
-   * 扫描 ~/.claude/projects 下所有直接子目录的 mtime，排序后拼接。
+   * 对每个子目录，取子目录 mtime 和其中最新 .jsonl 文件 mtime 的较大值。
+   * 这样无论是新增会话（子目录 mtime 变）还是现有会话被追加写入
+   * （JSONL 文件 mtime 变），都能检测到变化。
    */
-  private getClaudeCodeFingerprint(): string {
-    const projectsDir = DATA_PATHS["claude-code"];
+  private getClaudeCodeFingerprint(projectsDir: string): string {
     const entries = fs.readdirSync(projectsDir, { withFileTypes: true });
-    const mtimes: number[] = [];
+    const signals: number[] = [];
 
     for (const entry of entries) {
-      if (entry.isDirectory()) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const dirPath = path.join(projectsDir, entry.name);
+        const dirMtime = fs.statSync(dirPath).mtimeMs;
+
+        // 找该目录下最新的 .jsonl 文件 mtime
+        let latestFile = 0;
         try {
-          const stat = fs.statSync(path.join(projectsDir, entry.name));
-          mtimes.push(stat.mtimeMs);
-        } catch {
-          // 单个目录 stat 失败跳过
-        }
+          const files = fs.readdirSync(dirPath);
+          for (const f of files) {
+            if (!f.endsWith(".jsonl")) continue;
+            try {
+              const fstat = fs.statSync(path.join(dirPath, f));
+              if (fstat.mtimeMs > latestFile) latestFile = fstat.mtimeMs;
+            } catch { /* skip */ }
+          }
+        } catch { /* skip */ }
+
+        signals.push(Math.max(dirMtime, latestFile));
+      } catch {
+        // 单个目录 stat 失败跳过
       }
     }
 
-    mtimes.sort((a, b) => a - b);
-    return `claude-code:${mtimes.join(",")}`;
+    signals.sort((a, b) => a - b);
+    return `claude-code:${signals.join(",")}`;
   }
 
   /** 单文件数据源的 fingerprint：<agent>:<mtime> */

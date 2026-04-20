@@ -85,6 +85,14 @@ export interface SessionProvider {
   getSessions(): Promise<UnifiedSession[]>;
 }
 
+/** 数据路径解析结果 */
+export interface ResolvedDataPath {
+  /** 实际使用的路径 */
+  path: string;
+  /** 路径来源 ("config" | "default" | "env" | "xdg" | "detected") */
+  source: string;
+}
+
 /** 搜索/过滤选项 */
 export interface FilterOptions {
   /** 按 Agent 类型过滤 */

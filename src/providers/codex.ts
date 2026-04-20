@@ -1,8 +1,7 @@
-import os from "node:os";
-import path from "node:path";
 import fs from "node:fs";
 import Database from "better-sqlite3";
 import type { SessionProvider, UnifiedSession } from "./types.js";
+import { resolveAgentPath } from "../core/paths.js";
 
 /** threads 表行类型 */
 interface ThreadRow {
@@ -20,13 +19,6 @@ interface ThreadRow {
 
 /** 被视为无效标题的命令列表 */
 const INVALID_TITLES = new Set(["/exit", "exit", "/quit", "quit", "/q"]);
-
-/** 数据库文件相对 home 目录的路径 */
-const DB_RELATIVE_PATH = ".codex/state_5.sqlite";
-
-function getDbPath(): string {
-  return path.join(os.homedir(), DB_RELATIVE_PATH);
-}
 
 /**
  * 从 title / first_user_message 中提取有效的显示标题
@@ -48,13 +40,24 @@ export class CodexProvider implements SessionProvider {
   readonly name = "codex" as const;
   readonly displayName = "Codex";
 
+  private readonly customPath?: string;
+
+  constructor(dataPath?: string) {
+    this.customPath = dataPath;
+  }
+
+  /** 动态解析数据库路径 */
+  private resolveDataPath(): string | null {
+    return resolveAgentPath("codex", this.customPath);
+  }
+
   async isAvailable(): Promise<boolean> {
-    return fs.existsSync(getDbPath());
+    return this.resolveDataPath() !== null;
   }
 
   async getSessions(): Promise<UnifiedSession[]> {
-    const dbPath = getDbPath();
-    if (!fs.existsSync(dbPath)) {
+    const dbPath = this.resolveDataPath();
+    if (!dbPath) {
       return [];
     }
 

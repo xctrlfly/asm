@@ -12,6 +12,11 @@ import {
   getSessionHistory,
   type HistoryMessage,
 } from "../core/history.js";
+import {
+  deleteSession,
+  getDeleteDescription,
+  type DeleteResult,
+} from "../core/deleter.js";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -42,8 +47,14 @@ const VISIBLE_ROWS = 15;
 // 辅助函数
 // ---------------------------------------------------------------------------
 
+// ── 列宽常量（和 cli.tsx printSessionTable 保持一致）──────────
+const COL_TITLE  = 36;
+const COL_DIR    = 26;
+const COL_BRANCH = 20;
+const COL_TIME   = 16;
+
 /** 缩短路径显示：将 HOME 前缀替换为 ~，超长则截断中间 */
-function shortenPath(p: string, maxLen = 30): string {
+function shortenPath(p: string, maxLen = COL_DIR): string {
   if (!p) return "";
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "";
   let display = p;
@@ -51,7 +62,7 @@ function shortenPath(p: string, maxLen = 30): string {
     display = "~" + display.slice(home.length);
   }
   if (display.length <= maxLen) return display;
-  return display.slice(0, 12) + "..." + display.slice(-15);
+  return display.slice(0, 10) + "…" + display.slice(-(maxLen - 11));
 }
 
 /** 相对时间格式化 */
@@ -188,6 +199,95 @@ function HistoryView({ session, messages }: HistoryViewProps) {
 }
 
 // ---------------------------------------------------------------------------
+// DeleteConfirmView 删除确认组件
+// ---------------------------------------------------------------------------
+
+interface DeleteConfirmViewProps {
+  session: UnifiedSession;
+  isDeleting: boolean;
+  deleteResult: DeleteResult | null;
+}
+
+function DeleteConfirmView({ session, isDeleting, deleteResult }: DeleteConfirmViewProps) {
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      <Box
+        borderStyle="single"
+        borderColor="red"
+        paddingX={1}
+        flexDirection="column"
+      >
+        {/* 标题 */}
+        <Box marginBottom={1} flexDirection="column">
+          <Text color="red" bold>
+            {" "}Delete Session
+          </Text>
+        </Box>
+
+        {/* 会话信息 */}
+        <Box marginBottom={1} flexDirection="column">
+          <Text>
+            {"  "}
+            <AgentBadge agent={session.agent} />
+            {"  "}
+            <Text bold>{session.title}</Text>
+          </Text>
+          <Text color="gray">
+            {"  "}
+            {shortenPath(session.workingDirectory, 60)}
+          </Text>
+          <Text color="gray">
+            {"  "}
+            {relativeTime(session.updatedAt)}
+          </Text>
+        </Box>
+
+        {/* 操作说明 */}
+        <Box marginBottom={1} flexDirection="column">
+          <Text color="yellow" bold>{"  "}将执行的操作:</Text>
+          <Text color="gray">{"  "}{getDeleteDescription(session.agent)}</Text>
+        </Box>
+
+        {/* 状态显示 */}
+        {isDeleting ? (
+          <Box paddingY={1}>
+            <Text color="yellow">{"  "}正在删除...</Text>
+          </Box>
+        ) : deleteResult ? (
+          <Box paddingY={1} flexDirection="column">
+            {deleteResult.success ? (
+              <>
+                <Text color="green">{"  "}✓ {deleteResult.message}</Text>
+                {deleteResult.recoveryHint && (
+                  <Text color="gray">{"  "}{deleteResult.recoveryHint}</Text>
+                )}
+              </>
+            ) : (
+              <Text color="red">{"  "}✗ {deleteResult.message}</Text>
+            )}
+          </Box>
+        ) : null}
+      </Box>
+
+      {/* 底部提示 */}
+      <Box paddingX={1}>
+        {deleteResult ? (
+          <Text color="gray">
+            Press <Text color="white" bold>any key</Text> to return
+          </Text>
+        ) : isDeleting ? (
+          <Text color="gray">请等待...</Text>
+        ) : (
+          <Text color="gray">
+            Press <Text color="red" bold>y</Text> to confirm delete, <Text color="white" bold>any other key</Text> to cancel
+          </Text>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // HelpView 帮助页面组件
 // ---------------------------------------------------------------------------
 
@@ -237,6 +337,7 @@ function HelpView() {
           <Text>  <Text color="white" bold>{"    /"}</Text>{"          "}进入搜索模式 (模糊匹配)</Text>
           <Text>  <Text color="white" bold>{"  Tab"}</Text>{"          "}切换 Agent 过滤器</Text>
           <Text>  <Text color="white" bold>{"    h"}</Text>{"          "}预览选中会话的消息历史</Text>
+          <Text>  <Text color="white" bold>{"    d"}</Text>{"          "}删除/归档选中会话</Text>
           <Text>  <Text color="white" bold>{"  Esc"}</Text>{"          "}退出搜索 / 关闭帮助</Text>
           <Text>  <Text color="white" bold>{"    ?"}</Text>{"          "}显示/关闭本帮助</Text>
           <Text>  <Text color="white" bold>{"    q"}</Text>{"          "}退出 asm</Text>
@@ -249,7 +350,7 @@ function HelpView() {
           <Text>  <Text color="magenta" bold>CC</Text>  Claude Code    <Text color="green">full resume</Text>     claude -r {"<id>"}</Text>
           <Text>  <Text color="green" bold>CX</Text>  Codex          <Text color="green">full resume</Text>     codex --resume {"<id>"}</Text>
           <Text>  <Text color="blue" bold>CR</Text>  Cursor         <Text color="yellow">open workspace</Text>  cursor {"<dir>"}</Text>
-          <Text>  <Text color="cyan" bold>OC</Text>  OpenCode       <Text color="yellow">open workspace</Text>  opencode</Text>
+          <Text>  <Text color="cyan" bold>OC</Text>  OpenCode       <Text color="green">full resume</Text>     opencode --session {"<id>"}</Text>
           <Text> </Text>
           <Text color="gray">  {"  "}full resume = cd 到对应目录 + 恢复到具体会话上下文</Text>
           <Text color="gray">  {"  "}open workspace = 打开 workspace 目录 (无法定位到具体会话)</Text>
@@ -293,19 +394,26 @@ export function App({ sessions, onSelect }: AppProps) {
   const [showHistory, setShowHistory] = useState(false);
   const [historySession, setHistorySession] = useState<UnifiedSession | null>(null);
   const [historyMessages, setHistoryMessages] = useState<HistoryMessage[] | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<UnifiedSession | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteResult, setDeleteResult] = useState<DeleteResult | null>(null);
+  const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [agentFilterIdx, setAgentFilterIdx] = useState(0);
 
   const agentFilter = AGENT_FILTER_CYCLE[agentFilterIdx]!;
 
-  // 过滤后的会话列表
+  // 过滤后的会话列表（排除已删除的）
   const filteredSessions = useMemo(() => {
-    return applyFilters(sessions, {
+    const filtered = applyFilters(sessions, {
       agent: agentFilter === "all" ? undefined : agentFilter,
       keyword: searchQuery || undefined,
     });
-  }, [sessions, agentFilter, searchQuery]);
+    if (removedIds.size === 0) return filtered;
+    return filtered.filter((s) => !removedIds.has(s.id));
+  }, [sessions, agentFilter, searchQuery, removedIds]);
 
   // 索引越界保护
   useEffect(() => {
@@ -330,6 +438,43 @@ export function App({ sessions, onSelect }: AppProps) {
       setShowHistory(false);
       setHistorySession(null);
       setHistoryMessages(null);
+      return;
+    }
+
+    // ── 删除确认模式 ──
+    if (showDeleteConfirm && deleteTarget) {
+      // 正在执行删除时忽略输入
+      if (isDeleting) return;
+
+      // 删除完成后任意键返回
+      if (deleteResult) {
+        setShowDeleteConfirm(false);
+        setDeleteTarget(null);
+        setDeleteResult(null);
+        return;
+      }
+
+      // y 确认删除
+      if (input === "y" || input === "Y") {
+        setIsDeleting(true);
+        deleteSession(deleteTarget)
+          .then((result) => {
+            setDeleteResult(result);
+            setIsDeleting(false);
+            if (result.success) {
+              setRemovedIds((prev) => new Set([...prev, deleteTarget.id]));
+            }
+          })
+          .catch(() => {
+            setDeleteResult({ success: false, message: "删除时发生未知错误" });
+            setIsDeleting(false);
+          });
+        return;
+      }
+
+      // 其他任意键取消
+      setShowDeleteConfirm(false);
+      setDeleteTarget(null);
       return;
     }
 
@@ -376,6 +521,17 @@ export function App({ sessions, onSelect }: AppProps) {
         getSessionHistory(session.id, session.agent, session.workingDirectory)
           .then((history) => setHistoryMessages(history.messages))
           .catch(() => setHistoryMessages([]));
+      }
+      return;
+    }
+
+    if (input === "d") {
+      const session = filteredSessions[selectedIndex];
+      if (session) {
+        setDeleteTarget(session);
+        setDeleteResult(null);
+        setIsDeleting(false);
+        setShowDeleteConfirm(true);
       }
       return;
     }
@@ -430,6 +586,17 @@ export function App({ sessions, onSelect }: AppProps) {
       }
       return next;
     });
+  }
+
+  // ── 删除确认页面 ──
+  if (showDeleteConfirm && deleteTarget) {
+    return (
+      <DeleteConfirmView
+        session={deleteTarget}
+        isDeleting={isDeleting}
+        deleteResult={deleteResult}
+      />
+    );
   }
 
   // ── 历史预览页面 ──
@@ -498,7 +665,7 @@ export function App({ sessions, onSelect }: AppProps) {
               <Box key={session.id + session.agent} gap={1}>
                 <Text color="yellow">{isSelected ? ">" : " "}</Text>
                 <AgentBadge agent={session.agent} />
-                <Box width={40}>
+                <Box width={COL_TITLE}>
                   <Text
                     color={isSelected ? "yellow" : "white"}
                     bold={isSelected}
@@ -507,17 +674,17 @@ export function App({ sessions, onSelect }: AppProps) {
                     {session.title}
                   </Text>
                 </Box>
-                <Box width={30}>
+                <Box width={COL_DIR}>
                   <Text color="gray" wrap="truncate">
                     {shortenPath(session.workingDirectory)}
                   </Text>
                 </Box>
-                <Box width={16}>
+                <Box width={COL_BRANCH}>
                   <Text color="green" wrap="truncate">
                     {session.gitBranch || ""}
                   </Text>
                 </Box>
-                <Box width={18}>
+                <Box width={COL_TIME}>
                   <Text color="gray" dimColor wrap="truncate">
                     {relativeTime(session.updatedAt)}
                   </Text>
@@ -551,6 +718,8 @@ export function App({ sessions, onSelect }: AppProps) {
           <Text color="white" bold>/</Text> search
           {"  "}
           <Text color="white" bold>h</Text> history
+          {"  "}
+          <Text color="white" bold>d</Text> delete
           {"  "}
           <Text color="white" bold>?</Text> help
           {"  "}

@@ -3,33 +3,23 @@ import path from "node:path";
 import fs from "node:fs";
 import Database from "better-sqlite3";
 import type { SessionProvider, UnifiedSession } from "./types.js";
+import { resolveAgentPath } from "../core/paths.js";
 
 // ---------------------------------------------------------------------------
 // 路径工具
 // ---------------------------------------------------------------------------
 
-/** Cursor 应用数据根目录 (目前只支持 macOS) */
-function getCursorDataDir(): string {
-  if (process.platform === "darwin") {
-    return path.join(
-      os.homedir(),
-      "Library",
-      "Application Support",
-      "Cursor",
-      "User",
-    );
-  }
-  // Linux 占位，暂不启用
-  // return path.join(os.homedir(), ".config", "Cursor", "User");
-  return "";
+/**
+ * 从全局 DB 路径反推 Cursor User 数据目录。
+ * 例: .../Cursor/User/globalStorage/state.vscdb → .../Cursor/User
+ */
+function getUserDirFromDbPath(dbPath: string): string {
+  // dbPath 格式: <userDir>/globalStorage/state.vscdb
+  return path.dirname(path.dirname(dbPath));
 }
 
-function getGlobalDbPath(): string {
-  return path.join(getCursorDataDir(), "globalStorage", "state.vscdb");
-}
-
-function getWorkspaceStorageDir(): string {
-  return path.join(getCursorDataDir(), "workspaceStorage");
+function getWorkspaceStorageDir(userDir: string): string {
+  return path.join(userDir, "workspaceStorage");
 }
 
 // ---------------------------------------------------------------------------
@@ -161,10 +151,10 @@ function resolveTitle(
  *    拿到该 workspace 关联的 composerIds
  * 3. 将 composerId → folder 进行反向映射
  */
-function buildComposerToFolderMap(): Map<string, string> {
+function buildComposerToFolderMap(userDir: string): Map<string, string> {
   const result = new Map<string, string>();
 
-  const wsDir = getWorkspaceStorageDir();
+  const wsDir = getWorkspaceStorageDir(userDir);
   if (!fs.existsSync(wsDir)) {
     return result;
   }
@@ -246,21 +236,30 @@ export class CursorProvider implements SessionProvider {
   readonly name = "cursor" as const;
   readonly displayName = "Cursor";
 
+  private readonly customPath?: string;
+
+  constructor(dataPath?: string) {
+    this.customPath = dataPath;
+  }
+
+  /** 动态解析全局 DB 路径 */
+  private resolveDataPath(): string | null {
+    return resolveAgentPath("cursor", this.customPath);
+  }
+
   async isAvailable(): Promise<boolean> {
-    if (process.platform !== "darwin") {
-      return false;
-    }
-    return fs.existsSync(getGlobalDbPath());
+    return this.resolveDataPath() !== null;
   }
 
   async getSessions(): Promise<UnifiedSession[]> {
-    const globalDbPath = getGlobalDbPath();
-    if (!fs.existsSync(globalDbPath)) {
+    const globalDbPath = this.resolveDataPath();
+    if (!globalDbPath) {
       return [];
     }
 
     // --- 构建 composerId → folder 映射 (来自 workspace 侧) ---
-    const composerToFolder = buildComposerToFolderMap();
+    const userDir = getUserDirFromDbPath(globalDbPath);
+    const composerToFolder = buildComposerToFolderMap(userDir);
 
     // --- 从全局 DB 读取所有 composerData:* ---
     let db: InstanceType<typeof Database>;
